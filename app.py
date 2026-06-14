@@ -4,10 +4,11 @@ import numpy as np
 import html
 import streamlit.components.v1 as components
 from ens_live import ens_badge_html
+import base64, pathlib
 
 st.set_page_config(
     page_title="Argos",
-    page_icon="👁️",
+    page_icon="assets/argos_logo_art.png",
     layout="wide"
 )
 
@@ -88,6 +89,12 @@ def load_data():
 df = load_data()
 rated = df[df["feedback_count"] > 0]
 
+def logo_img(h=68):
+    try:
+        b64 = base64.b64encode(pathlib.Path("assets/argos_logo_art.svg").read_bytes()).decode()
+        return f'<img src="data:image/svg+xml;base64,{b64}" style="height:{h}px;width:auto;display:block">'
+    except Exception:
+        return ""
 
 def reasons(r):
     out=[]
@@ -173,6 +180,10 @@ def render_pager(page, pages):
     if cols[-1].button("›", disabled=(page >= pages - 1), use_container_width=True, key="pg_next"):
         go(page + 1)
  
+st.markdown(
+    f'<div style="position:fixed;top:14px;left:22px;z-index:1000">{logo_img(40)}</div>',
+    unsafe_allow_html=True
+)
 st.markdown('<div class="word">argos</div>', unsafe_allow_html=True)
 st.markdown('<div class="tag">trust scores for the on-chain agent economy</div>', unsafe_allow_html=True)
 _, mid, _ = st.columns([1,5,1])

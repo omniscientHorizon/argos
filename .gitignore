@@ -1,1 +1,8 @@
 datasets/argos_backup.csv
+.env.*
+.devcontainer/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
