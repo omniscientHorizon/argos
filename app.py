@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import html
 import streamlit.components.v1 as components
+from ens_live import ens_badge_html
 
 st.set_page_config(
     page_title="Argos",
@@ -113,6 +114,9 @@ def trust_card(r):
     rec = f'{r["days_since_last"]:.0f}d ago' if pd.notna(r.get("days_since_last")) else "—"
     desc = str(r.get("description") or "")[:280].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
     nm = str(r["display"]).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    badge = ens_badge_html(r["agent_id"], r.get("reg_json", ""))
+    if badge:
+        st.markdown(badge, unsafe_allow_html=True)
     ep = agent_endpoint(r)
     arrow = (f'<a href="{ep}" target="_blank" title="Visit / transact with this agent" '
              f'style="text-decoration:none;color:#1D4ED8;font-weight:800;font-size:20px;margin-left:8px">↗</a>') if ep else ''
