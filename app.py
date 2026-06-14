@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import html
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="Argos",
@@ -39,7 +41,19 @@ unsafe_allow_html=True
 )
 
 PCLASS = {"Trusted":"p-trusted","Emerging":"p-emerging","Watchlist":"p-watch","Unrated":"p-unrated"}
+PAGE_SIZE = 10
 def pill(t): return f'<span class="pill {PCLASS.get(t,"p-unrated")}">{t}</span>'
+
+def payable_badge(r):
+    return ('<span class="pill" style="background:#7C3AED;margin-left:6px">⚡ x402-payable</span>'
+            if str(r.get("x402_status","")).lower()=="true" else "")
+
+def agent_endpoint(r):
+    for ep in str(r.get("service_endpoints","") or "").split("|"):
+        ep = ep.strip()
+        if ep.startswith("http"):
+            return ep
+    return None
 
 @st.cache_data
 def load_data():
@@ -97,6 +111,11 @@ def trust_card(r):
     dv  = f'{r["diversity"]:.2f}' if pd.notna(r["diversity"]) else "—"
     bu  = f'{r["burst"]*100:.0f}%' if pd.notna(r["burst"]) else "—"
     rec = f'{r["days_since_last"]:.0f}d ago' if pd.notna(r.get("days_since_last")) else "—"
+    desc = str(r.get("description") or "")[:280].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    nm = str(r["display"]).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    ep = agent_endpoint(r)
+    arrow = (f'<a href="{ep}" target="_blank" title="Visit / transact with this agent" '
+             f'style="text-decoration:none;color:#1D4ED8;font-weight:800;font-size:20px;margin-left:8px">↗</a>') if ep else ''
     chips = "".join([
         f'<span class="chip">{int(r["unique_clients"])} reviewers</span>',
         f'<span class="chip">{int(r["feedback_count"])} reviews</span>',
@@ -108,17 +127,18 @@ def trust_card(r):
     flags = "".join(f'<span class="flag">{x}</span>' for x in reasons(r))
     html = f'''<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
-        <div>
-          <div class="verdict">{verdict(r)}</div>
-          <div class="muted" style="font-size:14px">{r["display"]} · id {int(r["agent_id"])}</div>
+        <div style="flex:1;min-width:0">
+          <div class="verdict">{nm} <span style="font-size:14px;color:#6B7280;font-weight:400">· id {int(r["agent_id"])}</span>{arrow}</div>
+          {('<div class="muted" style="font-size:14px;margin-top:8px;line-height:1.5">'+desc+'</div>') if desc else ''}
         </div>
-        <div style="text-align:right">{pill(r["argos_tier"])}
+        <div style="text-align:right">{pill(r["argos_tier"])}{payable_badge(r)}
           <div class="big" style="margin-top:8px">{r["agent_rank_score"]:.0f}</div>
           <div class="lab">Argos score</div>
         </div>
       </div>
       <hr>
-      <div class="lab" style="margin-bottom:6px">Signals</div>
+      <div style="font-weight:700;font-size:16px;color:#111418;margin-bottom:2px">{verdict(r)}</div>
+      <div class="lab" style="margin:14px 0 6px">Signals</div>
       <div>{chips}</div>
       {("<div style='margin-top:10px'>"+flags+"</div>") if flags else ""}
       <hr>
@@ -131,8 +151,23 @@ def trust_card(r):
     </div>'''
     html = "".join(line.strip() for line in html.splitlines())
     st.markdown(html, unsafe_allow_html=True)
-    if isinstance(r.get("description"), str) and r["description"]:
-        st.caption(r["description"][:280])
+
+def render_pager(page, pages):
+    win = 7
+    lo = max(0, min(page - win//2, pages - win))
+    hi = min(pages, lo + win)
+    cols = st.columns(hi - lo + 2)
+    def go(p):
+        st.session_state["_page"] = p
+        st.session_state["_scroll"] = True
+        st.rerun()
+    if cols[0].button("‹", disabled=(page == 0), use_container_width=True, key="pg_prev"):
+        go(page - 1)
+    for i, p in enumerate(range(lo, hi)):
+        if cols[i+1].button(f"{p+1}", disabled=(p == page), use_container_width=True, key=f"pg_{p}"):
+            go(p)
+    if cols[-1].button("›", disabled=(page >= pages - 1), use_container_width=True, key="pg_next"):
+        go(page + 1)
  
 st.markdown('<div class="word">argos</div>', unsafe_allow_html=True)
 st.markdown('<div class="tag">trust scores for the on-chain agent economy</div>', unsafe_allow_html=True)
@@ -150,22 +185,42 @@ if q and q.strip():
         st.markdown('<div class="card"><div class="verdict">No agent found</div>'
                     '<div class="muted">Try a name, numeric id, or owner address.</div></div>', unsafe_allow_html=True)
     else:
-        m = m.sort_values(["tier_rank","agent_rank_score"], ascending=[True,False]) if "tier_rank" in m \
-            else m.sort_values("agent_rank_score", ascending=False)
-        if len(m) > 1:
-            pick = st.selectbox(f"{len(m)} matches", m["agent_id"].tolist(),
-                                format_func=lambda i: f'{df.loc[df.agent_id==i,"display"].iloc[0]} (id {i})')
-            trust_card(df[df.agent_id==pick].iloc[0])
-        else:
-            trust_card(m.iloc[0])
+        m = m.sort_values("agent_rank_score", ascending=False)
+        total = len(m)
+        pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        if st.session_state.get("_q") != q:          # new query -> back to page 1
+            st.session_state["_q"] = q
+            st.session_state["_page"] = 0
+        page = min(st.session_state.get("_page", 0), pages - 1)
+        if st.session_state.pop("_scroll", False):
+            components.html("""<script>
+              const d=window.parent.document;
+              const el=d.querySelector('section.main')||d.querySelector('[data-testid="stMain"]')||d.querySelector('.main');
+              (el||window.parent).scrollTo({top:0,behavior:'smooth'});
+            </script>""", height=0)
+        st.caption(f"{total} result{'s' if total != 1 else ''}"
+                   + (f"  ·  page {page+1} of {pages}" if pages > 1 else ""))
+        for _, r in m.iloc[page*PAGE_SIZE:(page+1)*PAGE_SIZE].iterrows():
+            trust_card(r)
+        if pages > 1:
+            render_pager(page, pages)
 else:
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("###### Trusted leaderboard")
-    t = df[df.argos_tier=="Trusted"].sort_values("agent_rank_score", ascending=False)
+    st.markdown("###### ⚡ Trustworthy & payable")
+    st.caption("Well-ranked agents that also support x402 payments — the one-stop list to discover trustworthy, payable agents in the emerging agent economy.")
+    tp = df[(df.argos_tier.isin(["Trusted","Emerging"])) & (df.x402_status.astype(str).str.lower()=="true")].copy()
+    tp = tp.sort_values(["tier_rank","agent_rank_score"], ascending=[True,False])
+    tp["endpoint"] = tp["service_endpoints"].apply(
+        lambda s: next((e.strip() for e in str(s or "").split("|") if e.strip().startswith("http")), None))
     st.dataframe(
-        t[["display","agent_rank_score","unique_clients","diversity","x402_status"]].rename(
-            columns={"display":"agent","agent_rank_score":"Argos","unique_clients":"reviewers","x402_status":"x402"}),
-        use_container_width=True, hide_index=True)
+        tp[["display","argos_tier","agent_rank_score","unique_clients","supportedTrust","endpoint"]].rename(
+            columns={"display":"agent","argos_tier":"tier","agent_rank_score":"Argos",
+                     "unique_clients":"reviewers","supportedTrust":"trust model"}),
+        use_container_width=True, hide_index=True,
+        column_config={"endpoint": st.column_config.LinkColumn("visit", display_text="↗ open")})
+    # tp = tp.sort_values(["tier_rank","agent_rank_score"], ascending=[True,False])
+    st.caption(f"{len(tp)} agents are both well-ranked and x402-payable.")
+    st.markdown("<hr>", unsafe_allow_html=True)
  
     with st.expander("🚩  Flagged agents (Watchlist)"):
         w = df[df.argos_tier=="Watchlist"].copy()
@@ -185,7 +240,7 @@ else:
         b.caption("Ranked by Argos")
         b.dataframe(pool.sort_values("agent_rank_score",ascending=False).head(10)[["display","agent_rank_score","argos_tier"]]
                     .rename(columns={"display":"agent","agent_rank_score":"Argos"}), hide_index=True, use_container_width=True)
- 
+
 st.markdown('<div class="stat" style="margin-top:2rem">ERC-8004 · Ethereum mainnet via BigQuery</div>', unsafe_allow_html=True)
  
 
